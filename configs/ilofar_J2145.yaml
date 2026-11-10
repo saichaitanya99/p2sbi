@@ -1,0 +1,130 @@
+# ============================================================
+# J2145-0750 @ I-LOFAR (IE613, Birr Castle, Ireland)
+# Baseline config — reproduces the previously hardcoded values
+# exactly. Any change here changes the trained model.
+# ============================================================
+
+pulsar:
+  name:       J2145-0750
+  # = 1/62.295887837388923127 * 1000, the F0 used throughout the pre-refactor
+  # pipeline (pulsarDMvary.py, PPC.py, pp_tests.py, toa_diagnostics.py --f0).
+  # Do NOT round: period_ms divides the DM delay to get phase bins, so this
+  # value is part of what the trained model learned. The original YAML had
+  # 16.052415459633082 here, which implies F0 = 62.295920667808176 — matching
+  # no F0 in the codebase. verify_refactor.py caught it.
+  # NOTE: timeseries.py:327 carries a THIRD value, _F0 = 62.295887805195699721,
+  # labelled "par-file F0" — differs in the 9th decimal. See REFACTOR_PLAN S5.2.
+  period_ms:  16.052423919381354
+  # Par-file F0, used ONLY post-inference (timeseries.py) to turn fitted timing
+  # coefficients into dF0/dF1. Differs from 1/period_ms in the 9th decimal;
+  # kept separate rather than derived so neither value silently changes.
+  f0_par_hz:  62.295887805195699721
+  dm_header:  9.0058                  # SBI_DM_REF — DM of the reference epoch
+  dm_conv:    9.0027                  # CONV_DM_REF — conventional timing reference
+  raj:        "21h45m50.4604251s"
+  decj:       "-07d50m18.53003s"
+
+observatory:
+  name:      IE613
+  site:      "Birr Castle, Co. Offaly, Ireland"
+  lon_deg:   -7.9218
+  lat_deg:   53.0955
+  height_m:  72.0
+
+instrument:
+  n_freq_channels:    40
+  n_phase_bins:       512
+  freq_low_mhz:       112.01177701950073
+  freq_high_mhz:      190.13677701950073
+  reference_freq_mhz: 151.07427701950073
+  sigma_bandpass:     0.1             # nuisance, fixed — lognormal per-channel gain scatter
+  freq_tol_mhz:       2.0             # archive validation tolerance on each band edge
+
+simulation:
+  epoch_mjd:   59500                  # fixed — inference is epoch-agnostic
+  add_noise:   true
+  dm_smearing: false
+  noise_model: avg_peak               # avg_peak | per_channel_peak | radiometer
+  npol:        2                      # used by noise_model: radiometer only
+  t_obs_s:     30.0                   # used by noise_model: radiometer only
+  dm_param:    DM                     # which sampled param drives dispersion
+  snr_param:   snr                    # which sampled param drives the noise level
+
+# ------------------------------------------------------------
+# Inferred parameters — these ARE the theta vector, in this order.
+# Changing the order or the set invalidates existing posteriors.
+# ------------------------------------------------------------
+# `unit` and `display` are cosmetic only — they control how plots present a
+# parameter and never touch sampling, training or the theta vector.
+#   display: exp           theta stores log(x); show exp(theta)  [default when log: true]
+#   display: phase_to_us   theta is a phase fraction; show theta * P0 in microseconds
+inferred:
+  - {name: DM,            low: -0.025, high:  0.025, label: "$\\Delta$DM",   unit: "pc cm$^{-3}$"}
+  - {name: gamma_leading, low: -4.0,   high:  1.0,   label: "$\\gamma_{\\mathrm{lead}}$"}
+  - {name: gamma_main,    low: -6.0,   high:  1.0,   label: "$\\gamma_{\\mathrm{main}}$"}
+  - {name: toa,           low: -0.08,  high:  0.08,  label: "ToA offset",    unit: "$\\mu$s", display: phase_to_us}
+  - {name: snr,           low:  7.0,   high:  120.0, log: true, label: "S/N", display: exp}
+  - {name: amp_ref,       low:  0.1,   high:  0.5,   label: "$A_{\\mathrm{ref}}$"}
+
+# ------------------------------------------------------------
+# Nuisance parameters — sampled and marginalised, never inferred.
+# ------------------------------------------------------------
+nuisance:
+  - {name: conc_main,    low: 40.0,  high: 100.0}   # fit: kappa ~ 67, sharp
+  - {name: conc_premain, low: 10.0,  high:  40.0}   # fit: kappa ~ 23, broad bridge
+  - {name: conc_lead,    low: 40.0,  high: 100.0}   # fit: kappa ~ 66, sharp
+  - {name: conc_inter,   low:  8.0,  high:  30.0}   # fit: kappa ~ 18, broad bridge
+  - {name: amp_premain,  low:  0.25, high:  0.65}
+  - {name: amp_inter,    low:  0.05, high:  0.25}
+
+# ------------------------------------------------------------
+# Profile components. $name references a sampled parameter above.
+# amplitude_ref and concentration_ref are defined AT reference_freq_mhz.
+# phase_offset_param is added to phase_center_ref (default: toa).
+# ------------------------------------------------------------
+reference_component: Main
+
+components:
+  - name:                  Main
+    amplitude_ref:         1.0
+    phase_center_ref:      0.58036245
+    concentration_ref:     $conc_main
+    spectral_index_amp:    $gamma_main
+    spectral_index_width:  0.5
+    spectral_index_center: 0.0
+    sigma_broadening_bins: 0.0
+
+  - name:                  PreMain
+    amplitude_ref:         $amp_premain
+    phase_center_ref:      0.55222918
+    concentration_ref:     $conc_premain
+    spectral_index_amp:    $gamma_main
+    spectral_index_width:  0.5
+    spectral_index_center: 0.0
+    sigma_broadening_bins: 0.0
+
+  - name:                  Leading
+    amplitude_ref:         $amp_ref
+    phase_center_ref:      0.39381792
+    concentration_ref:     $conc_lead
+    spectral_index_amp:    $gamma_leading
+    spectral_index_width:  2.5
+    spectral_index_center: 0.0
+    sigma_broadening_bins: 0.0
+
+  - name:                  Inter
+    amplitude_ref:         $amp_inter
+    phase_center_ref:      0.43450154
+    concentration_ref:     $conc_inter
+    spectral_index_amp:    $gamma_leading
+    spectral_index_width:  2.5
+    spectral_index_center: 0.0
+    sigma_broadening_bins: 0.0
+
+# ------------------------------------------------------------
+# Scattering. type: fixed | free (free requires a declared param).
+# Removed from theta for J2145 — sub-bin, covaries with DM.
+# ------------------------------------------------------------
+scattering:
+  tau_ms:         {type: fixed, value: 0.0}
+  spectral_index: {type: fixed, value: -4.4}

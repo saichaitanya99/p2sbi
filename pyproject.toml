@@ -1,0 +1,43 @@
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[project]
+name = "p2sbi"
+dynamic = ["version"]
+description = "Simulation-based inference for profile-domain pulsar timing"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "BSD-3-Clause"
+license-files = ["LICENSE"]
+authors = [{ name = "Sai Chaitanya Susarla", email="s.c.susarla@soton.ac.uk" }, { name = "Aditya Parthasarathy" }, { name = "Gregory Ashton" }]
+maintainers = [{ name = "Sai Chaitanya Susarla" }]
+dependencies = [
+    "numpy",
+    "scipy",
+    "torch",
+    "sbi>=0.25,<0.26",
+    "arviz<1",                 # sbi 0.25 imports arviz.data, removed in arviz 1.0
+    "pyyaml",
+    "matplotlib",
+    "pandas",
+    "corner",
+    "psutil",
+    "astropy",
+    "tqdm",
+]
+
+[project.scripts]
+p2sbi        = "p2sbi.run_pipeline:main"
+p2sbi-sim    = "p2sbi.sim_maker:main"
+p2sbi-train  = "p2sbi.train_sbi:main"
+p2sbi-verify = "p2sbi.verify_refactor:main"
+
+[project.urls]
+Repository = "https://github.com/saichaitanya99/p2sbi"
+
+[tool.hatch.version]
+path = "src/p2sbi/__init__.py"
+
+[tool.hatch.build.targets.sdist]
+include = ["src/p2sbi", "configs/ilofar_J2145.yaml", "README.md", "LICENSE", "pyproject.toml"]

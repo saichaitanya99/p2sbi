@@ -1,0 +1,27 @@
+# Python artefacts
+__pycache__/
+*.pyc
+
+# Observational data. NOTE: no leading "./" — gitignore patterns are already
+# relative to this file's directory, and a pattern containing a slash is
+# anchored, so "./archives/" looks for a directory literally named "." and
+# never matches anything.
+archives/
+
+# Pipeline outputs. These are regenerable and enormous: a 30M-simulation
+# dataset is ~3.8 TB, so committing one by accident would be unrecoverable.
+sims_*/
+SBI_prods_*/
+sim_outputs/
+sim_check/
+real_data_outputs/
+
+# Per-run working directories (dataset chunks, checkpoints, posteriors, logs)
+# under the runs/<name>/ convention — same reasoning as above. Currently ~1.8TB.
+runs/
+
+# Artefacts the pipeline writes in place
+sbi-logs/
+efficiency_log.json
+validation_losses.png
+.DS_Store
