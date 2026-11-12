@@ -6,8 +6,7 @@ THE single definition of the SBI feature vector's components.
     x = portrait.flatten() | flux_per_channel | centroids
 
 Imported by BOTH the simulator (pulsarDMvary.py) and the real-data path
-(real_archive_loader.py). That is the entire point of this module: traps 3 and 4
-in CLAUDE.md — the dead-channel sentinel and the portrait normalisation — were
+(real_archive_loader.py). That is the entire point of this module: the dead-channel sentinel and the portrait normalisation — were
 cross-file contracts maintained by hand, each implemented twice, with nothing
 detecting drift. Here they are implemented once.
 

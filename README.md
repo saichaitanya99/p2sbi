@@ -1,19 +1,8 @@
-# SBI Pulsar Simulator — code reference
+# P2SBI - Simulation based inference for profile domain timing
 
 Simulation-based inference (SNPE-C / neural spline flows) for profile-domain
 pulsar timing. Everything instrument- and pulsar-specific lives in a single YAML
 config; no script contains a telescope or pulsar literal.
-
-**Related documents**
-
-| file | contents |
-|---|---|
-| `CLAUDE.md` | architecture, the known traps, resource budget for the cluster |
-| `REFACTOR_PLAN.md` | the change plan with IDs `S0.1`…`S5.8`, and open items |
-| `CHANGES.md` | every change made, with the reasoning and the bugs found |
-| `README.md` | this file — what each script is and how to run it |
-
----
 
 ## 0. Installation
 Just do `pip install p2sbi`
@@ -233,9 +222,6 @@ component kwargs. **Run this first whenever you edit a config.**
 flux_per_channel | centroids`. Called by both the simulator and
 `real_archive_loader.py`.
 
-This module exists because traps 3 and 4 in `CLAUDE.md` — the dead-channel
-sentinel and the portrait normalisation — used to be implemented twice and kept
-in step by hand. Divergence is now structurally impossible.
 
 `normalise_portrait()`, `flux_per_channel()`, `channel_centroids()`,
 `build_features()`. Depends on numpy only, so `penv_psr` can import it without
@@ -390,7 +376,7 @@ bounds, seed). Downstream scripts read the sidecar instead of hardcoding.
 
 > **`--mode single_pass` loads the whole dataset into CPU RAM.** For the German
 > config that is 122.5 KiB per simulation, so 30M sims needs 3.76 TB. Above your
-> node's RAM you must use chunk mode — see the resource table in `CLAUDE.md`.
+> node's RAM you must use chunk mode.
 >
 > Memory-mapping the chunks does **not** escape this. Tested on sbi 0.25.0:
 > `append_simulations` copies into its own tensor — `inference._x_roundwise`
@@ -448,8 +434,8 @@ is far longer, so the saving is the head start, not a halving:
 The group is moved to the **GPU** (`append_simulations(theta.to(device),
 x.to(device))`), so sims/round is bounded by VRAM, not host RAM. Raising it is
 by far the bigger lever on wall clock — and on the catastrophic-forgetting
-exposure, since it is 1,000 sequential warm-started rounds that create the risk
-`CLAUDE.md` flags for chunk mode.
+exposure, since it is 1,000 sequential warm-started rounds that create the risk.
+
 
 ### `simulation_maker.py` — one test simulation
 
@@ -518,7 +504,10 @@ are deliberately a different feature.
 
 ### `fit_vonmises.py` — component fitting
 ```bash
-# free fit (the measurement)
+# no config: everything from the archive
+conda run -n penv_psr python -m p2sbi.fit_vonmises archives/DE601/*.ar --outdir archives/DE601/
+
+# free fit (the measurement), compared with a config
 conda run -n penv_psr python -m p2sbi.fit_vonmises archives/DE601/*.ar \
     --config configs/german_J2145.yaml --outdir archives/DE601/ --max_components 6
 
@@ -531,6 +520,13 @@ positional `infile` (PSRCHIVE `.ar` / `.fits` — same PSRFITS format — or `.p
 `--force_n_components` `--min_significance` `--ref_window` `--seed_from_config`
 `--emit-yaml` `--recentre-on` `--scattering` `--spectral-indices` `--n-subbands`
 `--nchan` `--ref-freq`
+
+**No config is needed.** Without `--config` it reads phase bins, channels,
+period and DM from the archive, and `--ref-freq` sets the reference frequency
+(default: the channel nearest the band's geometric centre). A `.pt` input
+still needs `--config`, because it carries no period. `--config` adds the
+comparison with that config's components, and `--seed_from_config`,
+`--emit-yaml` and `--recentre-on` work against it, so they require it.
 
 **`--scattering`** — for scattered pulsars. **Needs no config**: without
 `--config` it reads phase bins, channel grid, period and DM from the archive
@@ -699,16 +695,23 @@ conda run -n penv python -m p2sbi.timeseries --outdir real_data \
     --posterior_tensor <p>.pt --config configs/german_DE601.yaml
 ```
 `--outdir` `--posterior_tensor` `--config` `--n_samples` `--conventional_dm`
-`--offset_method {inv_var,ml_pairs}` `--toa_leakage` `--just_plot`
+`--offset_method {inv_var,ml_pairs}` `--toa_ref_mhz` `--just_plot`
 
 Batch inference over `real_*.pt` files → `timeseries.csv` plus plots. This is
 the **only** consumer of the observatory position, used for the annual Doppler
-DM correction, and the reason station configs exist at all.
+DM correction, and the reason station configs exist at all. Every inferred
+parameter gets `<name>`, `<name>_map` and `<name>_std` columns, looked up by
+name.
 
-> Its output CSV schema is still specific to the J2145 six-parameter set (it
-> writes columns like `gamma_leading_map`). The theta indices are looked up by
-> name and fail loudly, but a different parameter set would need the schema
-> generalising.
+**Use `toa_ref_us`, not `toa_us`.** The `toa` parameter is the arrival time at
+the top channel, where the simulator's dispersion sweep is zero; `toa_us`
+reports it unchanged. The archive is dedispersed and folded at its centre
+frequency f_c, and away from f_c the ToA picks up K·ΔDM·(1/f² − 1/f_c²). ΔDM is
+topocentric, so this includes an annual Doppler term: 0.86 μs at the top
+channel for J1713+0747 at GBT, 0.13 μs at f_c. `toa_ref_us` moves every posterior
+sample to `toa_ref_freq_mhz` (the archive centre, or `--toa_ref_mhz`) with its
+own ΔDM, so `toa_ref_us_std` includes the ToA–DM covariance. `corr_toa_dm` is
+their posterior correlation. The plots use `toa_ref_us`.
 
 ### `profile_evolution.py`, `toa_diagnostics.py`, `val_loss_plot.py`
 ```bash
@@ -726,7 +729,7 @@ validation-loss curves across runs; `train_sbi.py` invokes it automatically.
 
 ## 10. The traps
 
-From `CLAUDE.md`, with where each is now enforced:
+
 
 | # | trap | enforcement |
 |---|---|---|
@@ -748,7 +751,7 @@ Measured: `x_dim × 4` bytes and ~3 ms of one core per simulation.
 | German, 61 ch | 31354 | 122.5 KiB | 3.76 TB |
 
 `--mode single_pass` needs that same figure in **CPU RAM**. Generation is
-**I/O-bound**, not CPU-bound. Full tables in `CLAUDE.md`.
+**I/O-bound**, not CPU-bound.
 
 ## 12. Any pulsar, any telescope — what a new config may change
 

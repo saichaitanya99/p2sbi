@@ -6,7 +6,7 @@ pulsarDMvary.py before the config refactor (commit fd7f1cf, lines 742-876).
 
 Its only purpose is to let verify_refactor.py assert that the config-driven
 simulator reproduces the hardcoded one BIT-FOR-BIT under the baseline config
-`configs/ilofar_J2145.yaml`, as CLAUDE.md requires.
+`configs/ilofar_J2145.yaml`.
 
 Any difference means a prior bound, phase centre or spectral index was
 transcribed into the YAML wrong — and that would not be visible in the trained
@@ -15,7 +15,7 @@ posteriors until much later.
 Editing this file defeats the entire point of it. If the config-driven
 simulator is deliberately changed (new noise model, extra component, changed
 prior), do not "fix" this file to match — instead retire the exact-equality
-check for that config and record why in REFACTOR_PLAN.md.
+check for that config.
 """
 
 import numpy as np

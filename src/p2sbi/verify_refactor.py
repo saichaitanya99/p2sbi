@@ -2,7 +2,7 @@
 verify_refactor.py
 ------------------
 Asserts that the config-driven simulator reproduces the pre-refactor hardcoded
-simulator BIT-FOR-BIT under the baseline config, as CLAUDE.md requires.
+simulator BIT-FOR-BIT under the baseline config.
 
 Exact equality (np.array_equal), not np.allclose. A prior bound, phase centre
 or spectral index transcribed wrong into the YAML produces a difference here;

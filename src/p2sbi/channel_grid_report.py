@@ -438,7 +438,7 @@ def main():
     else:
         print(f"     [FAIL] the brightest observations are clearly outside the")
         print(f"            training distribution. Condition the model on the")
-        print(f"            per-observation grid (REFACTOR_PLAN.md S3.3 Option B).")
+        print(f"            per-observation grid.")
 
     print()
     if worst < 1.0 and worst_orth < 5.0:
@@ -448,7 +448,7 @@ def main():
     else:
         print(f"  => Do not share one nominal-grid model as it stands. Either train")
         print(f"     per station, or put the per-channel frequencies into the feature")
-        print(f"     vector (REFACTOR_PLAN.md S3.3 Option B), which also handles the")
+        print(f"     vector, which also handles the")
         print(f"     epoch-to-epoch drift that per-station grids cannot.")
     print()
     print(f"  CAVEAT: this is a linear-projection estimate of how the frequency")

@@ -268,8 +268,7 @@ def main(argv=None):
     #
     # Normalisation (trap 4) and the per-channel centroid (trap 3) come from
     # features.py — the SAME function the simulator calls. These used to be a second
-    # implementation here, kept in step with sim_generator by hand; that is what
-    # CLAUDE.md warns about, and it is now structurally impossible to diverge.
+    # implementation here, kept in step with sim_generator by hand.
     # --------------------------------------------------
     print(f"\n{'─'*52}")
     print("  Data products")

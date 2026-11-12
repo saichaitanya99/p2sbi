@@ -926,7 +926,7 @@ def _validate(cfg: PulsarConfig) -> None:
                 "dead_channels: requires instrument.centroid_mode: circular. In "
                 "linear mode an all-zero channel gets centroid 0 instead of the "
                 "sentinel, so it reads as a pulse ~reference_phase_bin bins from "
-                "the real one (REFACTOR_PLAN.md R2b)."
+                "the real one."
             )
 
     if cfg.tsys_scatter < 0:

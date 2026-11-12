@@ -13,7 +13,7 @@ pulsar:
   # 16.052415459633082 here, which implies F0 = 62.295920667808176 — matching
   # no F0 in the codebase. verify_refactor.py caught it.
   # NOTE: timeseries.py:327 carries a THIRD value, _F0 = 62.295887805195699721,
-  # labelled "par-file F0" — differs in the 9th decimal. See REFACTOR_PLAN S5.2.
+  # labelled "par-file F0" — differs in the 9th decimal.
   period_ms:  16.052423919381354
   # Par-file F0, used ONLY post-inference (timeseries.py) to turn fitted timing
   # coefficients into dF0/dF1. Differs from 1/period_ms in the 9th decimal;

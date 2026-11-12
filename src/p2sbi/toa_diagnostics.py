@@ -83,7 +83,13 @@ def load_data(csv_path):
     # than a real bool dtype, depending on how the CSV was written/read.
     if df["flagged"].dtype != bool:
         df["flagged"] = df["flagged"].astype(str).str.strip().str.lower() == "true"
- 
+
+    if "toa_ref_us" in df.columns:
+        df["toa_us"], df["toa_us_std"] = df["toa_ref_us"], df["toa_ref_us_std"]
+        print(f"Using toa_ref_us, the ToA at {df.toa_ref_freq_mhz.median():.0f} MHz.")
+    else:
+        print("This CSV has no toa_ref_us; using toa_us (top channel).")
+
     df = df.sort_values("mjd").reset_index(drop=True)
     return df
  

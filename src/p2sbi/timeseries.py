@@ -89,35 +89,16 @@ def solar_elongation_deg(mjd_array):
 
 def main(argv=None):
     global SBI_DM_REF, _GEO, _INFERRED_NAMES, cfg, decj, raj
-    _pre_cfg = argparse.ArgumentParser(add_help=False)
-    _pre_cfg.add_argument("--config", type=str, default=None)
-    _known_cfg, _ = _pre_cfg.parse_known_args(argv)
-    cfg = get_config(resolve_config_path(_known_cfg.config))
-    P0_S = cfg.period_s
-    SBI_DM_REF  = cfg.dm_header   # DM of the reference epoch used to derive SBI templates
-    CONV_DM_REF = cfg.dm_conv     # Reference DM used in conventional timing
-    K_DISP      = 4148.808        # μs GHz² (pc/cm³)⁻¹ — dispersion delay constant
-    PRIOR_LOW  = cfg.prior_low.astype(float)
-    PRIOR_HIGH = cfg.prior_high.astype(float)
-    raj  = cfg.raj
-    decj = cfg.decj
-    _GEO = cfg.geodetic   # lon_deg / lat_deg / height_m
-    _INFERRED_NAMES = [p.name for p in cfg.inferred]
-    _PARAM_LABELS   = [p.label or p.name for p in cfg.inferred]
-    _IDX_DM  = _idx_of(cfg.dm_param,  "dispersion measure")
-    _IDX_SNR = _idx_of(cfg.snr_param, "signal-to-noise")
-    _IDX_TOA = _idx_of("toa",         "time of arrival")
-    _LOG_IDX = [i for i, p in enumerate(cfg.inferred) if p.log]
-
     parser = argparse.ArgumentParser(
         description="Batch inference over real_*.pt files → timeseries CSV + plots."
     )
     parser.add_argument("--outdir",           type=str, required=True,
                         help="Directory containing real_*.pt files from real_archive_loader.py")
     parser.add_argument("--config",           type=str, default=None,
-                        help="Path to the YAML config. Supplies the pulsar period, "
+                        help="Required (or set $SBI_PULSAR_CONFIG): the YAML config the "
+                             "posterior was trained with. Supplies the pulsar period, "
                              "reference DMs, coordinates and the OBSERVATORY geodetic "
-                             "position used for the Doppler correction. Required unless $SBI_PULSAR_CONFIG is set.")
+                             "position used for the Doppler correction.")
     parser.add_argument("--posterior_tensor", type=str, required=True,
                         help="Path to trained posterior .pt")
     parser.add_argument("--n_samples",        type=int, default=10000,
@@ -132,13 +113,9 @@ def main(argv=None):
                         help="How to align SBI and epochwise DM series: "
                              "'inv_var' (default) = difference of separate inverse-variance weighted means; "
                              "'ml_pairs' = ML constant from matched epoch pairs.")
-    parser.add_argument("--toa_leakage", type=float, default=0.0,
-                        help="Empirical DM-to-ToA leakage fraction α ∈ [0, 1]. "
-                             "Correction: ToA_corrected = ToA_raw + α × K_DISP / ν_eff² × doppler_corr. "
-                             "Sign convention: β_sim = −α × K/ν² (negative because DM overestimate "
-                             "causes ToA underestimate), so undoing it requires adding +α × K/ν² × DC. "
-                             "Calibrated value for J2145-0750: 0.452 (from 1000 test simulations). "
-                             "Default 0.0 = no correction.")
+    parser.add_argument("--toa_ref_mhz", type=float, default=None,
+                        help="Report toa_ref_us at this frequency (MHz). Default: each "
+                             "archive's centre frequency, where it was dedispersed and folded.")
     parser.add_argument("--doppler_dm_factor", type=float, default=1.0,
                         help="Scale factor on the annual Doppler DM correction (see "
                              "doppler_dm_correction()'s docstring): ΔDM_bias = factor × DM_ref × "
@@ -152,6 +129,26 @@ def main(argv=None):
                         help="Continue even if the posterior was trained under a config "
                              "with a different fingerprint. Only use deliberately.")
     args = parser.parse_args(argv)
+    try:
+        cfg = get_config(resolve_config_path(args.config))
+    except ValueError as e:
+        parser.error(str(e))
+    P0_S = cfg.period_s
+    SBI_DM_REF  = cfg.dm_header   # DM of the reference epoch used to derive SBI templates
+    CONV_DM_REF = cfg.dm_conv     # Reference DM used in conventional timing
+    K_DISP      = 4148.808        # μs GHz² (pc/cm³)⁻¹ — dispersion delay constant
+    F_TOP_MHZ   = float(np.max(cfg.freqs_mhz))   # the simulator's dispersion reference
+    PRIOR_LOW  = cfg.prior_low.astype(float)
+    PRIOR_HIGH = cfg.prior_high.astype(float)
+    raj  = cfg.raj
+    decj = cfg.decj
+    _GEO = cfg.geodetic   # lon_deg / lat_deg / height_m
+    _INFERRED_NAMES = [p.name for p in cfg.inferred]
+    _PARAM_LABELS   = [p.label or p.name for p in cfg.inferred]
+    _IDX_DM  = _idx_of(cfg.dm_param,  "dispersion measure")
+    _IDX_SNR = _idx_of(cfg.snr_param, "signal-to-noise")
+    _IDX_TOA = _idx_of("toa",         "time of arrival")
+    _LOG_IDX = [i for i, p in enumerate(cfg.inferred) if p.log]
 
 
     if not args.just_plot:
@@ -233,10 +230,16 @@ def main(argv=None):
             std = np.std(samples,    axis=0)
             mp  = np.array([marginal_map(samples[:, i]) for i in range(samples.shape[1])])
 
+            # toa is the arrival at the top channel; move each sample, with its own ΔDM,
+            # to the frequency the archive was dedispersed at (Stage F).
+            f_ref   = args.toa_ref_mhz or float(sim["metadata"]["center_freq_mhz"])
+            toa_ref = (samples[:, _IDX_TOA] * P0_S * 1e6
+                       + K_DISP * samples[:, _IDX_DM] * ((1e3 / f_ref)**2 - (1e3 / F_TOP_MHZ)**2))
+
             flag_str = f"  [FLAGGED — {acceptance_pct:.1f}% in-bounds]" if flagged else ""
             print(f"  MJD {mjd:.5f} | "
                 f"DM_total={dm_header+med[_IDX_DM]:.5f} ± {std[_IDX_DM]:.5f} pc/cm³ | "
-                f"ToA={med[_IDX_TOA]*P0_S*1e6:.2f} ± {std[_IDX_TOA]*P0_S*1e6:.2f} μs | "
+                f"ToA@{f_ref:.0f}MHz={np.median(toa_ref):.2f} ± {np.std(toa_ref):.2f} μs | "
                 f"acceptance={acceptance_pct:.1f}%{flag_str}")
 
             if flagged:
@@ -264,6 +267,11 @@ def main(argv=None):
                 "toa_us":                med[_IDX_TOA] * P0_S * 1e6,
                 "toa_us_map":            mp[_IDX_TOA]  * P0_S * 1e6,
                 "toa_us_std":            std[_IDX_TOA] * P0_S * 1e6,
+                "toa_ref_freq_mhz":      f_ref,
+                "toa_ref_us":            np.median(toa_ref),
+                "toa_ref_us_map":        marginal_map(toa_ref),
+                "toa_ref_us_std":        np.std(toa_ref),
+                "corr_toa_dm":           np.corrcoef(samples[:, _IDX_TOA], samples[:, _IDX_DM])[0, 1],
             }
             # Every other inferred parameter, by name (log-sampled ones are already
             # linear here). These used to be med[1]..med[5] by position, which only
@@ -291,11 +299,6 @@ def main(argv=None):
         df["dm_residual_dcorr"]     = df["dm_residual"]      - _dcorr
         df["dm_residual_map_dcorr"] = df["dm_residual_map"]  - _dcorr
 
-        # ToA Doppler correction: not applied — theoretical full-correction
-        # (K_DISP × doppler_corr / ν_eff²) overcorrects because the SBI network
-        # only partially aliases the Doppler DM bias into ToA. The coupling
-        # fraction is not known a priori, so no correction is safer than a wrong one.
-
         df["solar_elongation"] = solar_elongation_deg(df["mjd"].values)
 
         csv_path = os.path.join(args.outdir, "timeseries.csv")
@@ -319,6 +322,9 @@ def main(argv=None):
 
         if "solar_elongation" not in df.columns:
             df["solar_elongation"] = solar_elongation_deg(df["mjd"].values)
+        if "toa_ref_us" not in df.columns:
+            print("NOTE: this CSV predates toa_ref_us; plotting toa_us (top channel). "
+                  "Rerun without --just_plot for the ToA at the archive's frequency.")
 
     # --------------------------------------------------
     # Plots
@@ -341,8 +347,8 @@ def main(argv=None):
 
     # 2-panel figure: DM | ToA residuals (no polynomial fit — real timing fits
     # belong in tempo2/PINT against a proper par file, not a quadratic in this
-    # script. This only applies the physical corrections (Doppler DM, DM→ToA
-    # leakage) and shows the resulting residuals as measured.)
+    # script. This only applies the Doppler DM correction and shows the ToAs
+    # at their reference frequency as measured.)
     fig, axes = plt.subplots(2, 1, figsize=(NAT_W_DOUBLE, 4.8), sharex=True,
                              gridspec_kw={"height_ratios": [1.2, 1], "hspace": 0.08})
 
@@ -362,18 +368,19 @@ def main(argv=None):
     plot_panel(axes[0], "dm_total_dcorr", "dm_total_std", _dm_ylabel, "steelblue", label=_dm_label)
 
     # ------------------------------------------------------------------
-    # Panel 2: ToA residuals — Doppler/leakage-corrected, undetrended.
+    # Panel 2: ToA residuals at the reference frequency, undetrended.
     # ------------------------------------------------------------------
     if len(ok) > 0:
-        toa_vals     = ok["toa_us"].values.copy()
-        toa_err_vals = ok["toa_us_std"].values
+        _col = "toa_ref_us" if "toa_ref_us" in ok.columns else "toa_us"
+        toa_vals     = ok[_col].values.copy()
+        toa_err_vals = ok[f"{_col}_std"].values
         mjd_ok_vals  = ok["mjd"].values
-        if args.toa_leakage != 0.0 and "center_freq_mhz" in ok.columns and "doppler_corr" in ok.columns:
-            _nu_ghz  = ok["center_freq_mhz"].values / 1000.0        # MHz → GHz
-            _toa_dc  = args.toa_leakage * K_DISP / _nu_ghz**2 * ok["doppler_corr"].values
-            toa_vals = toa_vals + _toa_dc
-            print(f"\n  ToA leakage correction: α = {args.toa_leakage:.3f}, "
-                  f"max |correction| = {np.abs(_toa_dc).max():.1f} μs")
+        if _col == "toa_ref_us":
+            _fr = ok["toa_ref_freq_mhz"]
+            _toa_label = (f"ToA at {_fr.median():.0f} MHz" if _fr.max() - _fr.min() < 1.0 else
+                          f"ToA at the archive centre ({_fr.min():.0f}–{_fr.max():.0f} MHz)")
+        else:
+            _toa_label = f"ToA at the top channel ({F_TOP_MHZ:.0f} MHz)"
 
         # Nothing is excluded from the plot or the stats below -- >3sigma is used
         # ONLY to decide which points get drawn lighter (alpha reduced by 0.2),
@@ -388,8 +395,6 @@ def main(argv=None):
         print(f"\n  ToA residuals (no fit applied): RMS = {rms_toa:.2f} μs, n={n_total} "
               f"({n_out} drawn lighter, >3σ from median)")
 
-        _toa_label = (f"ToA (leakage-corrected, α={args.toa_leakage:.3f})"
-                      if args.toa_leakage != 0.0 else "ToA (no leakage correction)")
         _ALPHA_REGULAR = 1.0
         _ALPHA_OUTLIER = 0.4
         axes[1].errorbar(mjd_ok_vals[~_is_out], toa_vals[~_is_out], yerr=toa_err_vals[~_is_out],
@@ -421,7 +426,7 @@ def main(argv=None):
         _best_toa  = _per_toa[np.argmax(_pow_toa)]
         _fap_toa   = _ls_toa.false_alarm_level([0.001, 0.01, 0.1])
         _ann_pow   = _pow_toa[np.argmin(np.abs(_per_toa - 365.25))]
-        print(f"\n  ToA residuals LS periodogram (α={args.toa_leakage:.3f}):")
+        print(f"\n  ToA residuals LS periodogram ({_toa_label}):")
         print(f"    Best period       : {_best_toa:.1f} days")
         print(f"    Peak power        : {_pow_toa.max():.4f}")
         print(f"    Power at 365 d    : {_ann_pow:.4f}")
@@ -440,8 +445,7 @@ def main(argv=None):
         _ax_ls_toa.axvline(_best_toa, color="#1F3A5F", lw=0.7, ls=":", alpha=0.6, zorder=1)
         _ax_ls_toa.text(_best_toa, _pow_toa.max(),
                         f" {_best_toa:.0f} d", fontsize=7, color="#1F3A5F", va="top", clip_on=True)
-        _lk_title = f"α = {args.toa_leakage:.3f}" if args.toa_leakage != 0.0 else "no leakage correction"
-        _ax_ls_toa.set_title(f"ToA residuals — LS periodogram  ({_lk_title})",
+        _ax_ls_toa.set_title(f"ToA residuals — LS periodogram  ({_toa_label})",
                               fontsize=8, loc="left")
         _ax_ls_toa.set_xlabel("Period (days)")
         _ax_ls_toa.set_ylabel("LS power")
@@ -666,7 +670,6 @@ def main(argv=None):
             print(f"  Peak power  : {power.max():.4f}")
             print(f"  FAP levels  : 0.1%={fap_levels[0]:.4f}  1%={fap_levels[1]:.4f}  10%={fap_levels[2]:.4f}")
 
-            from .natastro_style import NAT_W_DOUBLE
             fig4, ax4 = plt.subplots(figsize=(NAT_W_DOUBLE, 2.8))
 
             ax4.plot(periods, power, color="#1F3A5F", lw=0.9, zorder=2)

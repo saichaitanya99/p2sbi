@@ -162,7 +162,7 @@ class PulsarProfileSimulator:
             portrait_clean, dm, tau_scatter_ms, scattering_index, dm_smearing
         )
 
-        # Scintillation: signal only, before the noise (REFACTOR_PLAN.md Stage S)
+        # Scintillation: signal only, before the noise
         if channel_gain is not None:
             portrait_propagated = portrait_propagated * np.asarray(channel_gain, dtype=float)[:, None]
 

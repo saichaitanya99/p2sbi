@@ -15,6 +15,7 @@ SBI_prods_*/
 sim_outputs/
 sim_check/
 real_data_outputs/
+dist/
 
 # Per-run working directories (dataset chunks, checkpoints, posteriors, logs)
 # under the runs/<name>/ convention — same reasoning as above. Currently ~1.8TB.

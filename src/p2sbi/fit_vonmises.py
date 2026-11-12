@@ -45,10 +45,10 @@ from .pulsar_config import get_config, resolve_config_path
 # here -- is what closes that loop.
 # --------------------------------------------------
 
-# --scattering without an explicit --config needs no config at all: phase bins,
-# channel grid, period and DM come from the archive, and the fitted values are
-# printed as a block to build the config FROM. These module constants are then
-# filled in from the archive before anything uses them.
+# No config is needed: without one, phase bins, channel grid, period and DM come
+# from the archive (with --scattering the fitted values are written as a config to
+# build FROM). These module constants are then filled in from the archive before
+# anything uses them.
 
 
 
@@ -251,9 +251,14 @@ def main(argv=None):
     _pre.add_argument("--config", type=str, default=None)
     _pre.add_argument("--scattering", action="store_true")
     _known, _ = _pre.parse_known_args(argv)
-    CONFIG_FREE = _known.scattering and _known.config is None
-    cfg = None if CONFIG_FREE else get_config(resolve_config_path(_known.config))
-    N_BINS       = cfg.n_bins if cfg else None
+    cfg = None
+    if not (_known.scattering and _known.config is None):
+        try:
+            cfg = get_config(resolve_config_path(_known.config))
+        except ValueError:
+            pass                       # no config: everything comes from the archive
+    CONFIG_FREE = cfg is None
+    N_BINS      = cfg.n_bins if cfg else None
     REF_FREQ_MHZ = cfg.ref_freq_mhz if cfg else None
     FREQ_LOW_MHZ = cfg.freq_low_mhz if cfg else None
     FREQ_HI_MHZ  = cfg.freq_high_mhz if cfg else None
@@ -263,15 +268,18 @@ def main(argv=None):
         description=(f"Fit von Mises components. Config: {os.path.basename(cfg.path)} "
                      f"({cfg.name}, {cfg.n_chan} ch x {cfg.n_bins} bins, "
                      f"ref {cfg.ref_freq_mhz:.3f} MHz)") if cfg else
-                    "Fit von Mises components. --scattering without --config: phase bins, "
-                    "channels, period and DM are read from the archive."
+                    "Fit von Mises components. No config needed: without --config, phase "
+                    "bins, channels, period and DM are read from the archive."
     )
     parser.add_argument("infile", help="PSRCHIVE archive (.ar, .fits, .calib, .rf, .zap) or SBI .pt file")
     parser.add_argument("--outdir", default=None, help="Output directory for the plot")
     parser.add_argument("--config", default=None,
-                        help="Path to the YAML config. Supplies n_phase_bins, the "
-                             "reference frequency the fitted values are defined AT, "
-                             "and the period. Required unless $SBI_PULSAR_CONFIG is set.")
+                        help="Optional YAML config (or $SBI_PULSAR_CONFIG, except with "
+                             "--scattering). Without it, phase bins, channels, period and the "
+                             "reference frequency (--ref-freq) come from the archive. With it, "
+                             "they come from the config, the fit is compared with the config's "
+                             "components, and --emit-yaml, --seed_from_config and --recentre-on "
+                             "are available. A .pt input needs it.")
     parser.add_argument("--max_components", type=int, default=10,
                         help="Maximum number of components to try (default 10)")
     parser.add_argument("--force_n_components", type=int, default=None,
@@ -324,7 +332,7 @@ def main(argv=None):
                              "archive to this many channels before fitting (default: "
                              "keep the archive's).")
     parser.add_argument("--ref-freq", type=float, default=None, dest="ref_freq",
-                        help="With --scattering and no --config: reference frequency in "
+                        help="Without --config: reference frequency in "
                              "MHz at which amplitudes, widths and tau are quoted (snapped "
                              "to the nearest channel centre). Default: the channel nearest "
                              "the band's geometric centre. The report also gives the "
@@ -366,6 +374,12 @@ def main(argv=None):
                         help="With --scattering: subbands for the plots and the "
                              "tau-per-subband check (default 8).")
     args = parser.parse_args(argv)
+    if cfg is None:
+        _needs = [f for f, on in (("--emit-yaml", args.emit_yaml),
+                                  ("--seed_from_config", args.seed_from_config),
+                                  ("--recentre-on", args.recentre_on)) if on]
+        if _needs:
+            parser.error(f"{', '.join(_needs)}: needs --config (works against a config's components).")
 
     ext    = os.path.splitext(args.infile)[1].lower()
     outdir = args.outdir or os.path.dirname(os.path.abspath(args.infile)) or "."
@@ -1508,7 +1522,7 @@ def main(argv=None):
 
     if CONFIG_FREE:
         if ext not in (".ar", ".fits", ".calib", ".rf", ".zap"):
-            print(f"ERROR: --scattering without --config needs a PSRCHIVE archive (.ar, .fits, "
+            print(f"ERROR: without --config, fit_vonmises needs a PSRCHIVE archive (.ar, .fits, "
                   f"...): a {ext} file does not carry the period. Give the archive, or --config.")
             sys.exit(1)
         try:
@@ -1566,8 +1580,9 @@ def main(argv=None):
         print(f"  reference frequency {REF_FREQ_MHZ:.5f} MHz "
               + (f"(channel nearest --ref-freq {args.ref_freq:g})" if args.ref_freq
                  else "(channel nearest the band's geometric centre; --ref-freq to change)"))
-        _scattering_main()
-        sys.exit(0)
+        if args.scattering:
+            _scattering_main()
+            sys.exit(0)
 
 
     # ─────────────────────────────────────────────────────────────────────────────
@@ -1673,7 +1688,7 @@ def main(argv=None):
                       f"config as instrument.channel_freqs_mhz — a linspace model would "
                       f"misplace the simulated DM sweep. Use --emit-yaml to print them.")
         print(f"  reference channel: index {ref_idx}  ({archive_freqs[ref_idx]:.3f} MHz; "
-              f"config reference {REF_FREQ_MHZ:.3f} MHz, "
+              f"{'config reference' if cfg else 'reference'} {REF_FREQ_MHZ:.3f} MHz, "
               f"offset {archive_freqs[ref_idx]-REF_FREQ_MHZ:+.3f} MHz)")
         print(f"  reference window : channels {ref_lo}–{ref_hi-1} "
               f"({archive_freqs[ref_lo]:.3f}–{archive_freqs[ref_hi-1]:.3f} MHz, "
@@ -2028,7 +2043,7 @@ def main(argv=None):
     # circular. If they disagree, the numbers below show which model is better —
     # the seeded fit is never accepted on the strength of matching the config.
     _seeded = {}
-    if cfg.components:
+    if cfg is not None and cfg.components:
         _sp, _se, _sf = fit_seeded_from_config(fscrunch, int(np.argmax(fscrunch)))
         if _sp is not None:
             _sn   = len(cfg.components)
@@ -2087,39 +2102,40 @@ def main(argv=None):
         residuals  = fscrunch - best_fitted
         rms        = residuals.std()
 
-    _n_cfg = len(cfg.components)
-    _hit   = next((h for h in aic_history if h[0] == _n_cfg), None)
+    if cfg is not None:
+        _n_cfg = len(cfg.components)
+        _hit   = next((h for h in aic_history if h[0] == _n_cfg), None)
 
-    print(f"\n{'─'*60}")
-    print(f"  CONFIG COMPONENT COUNT CHECK  (config declares N = {_n_cfg})")
-    print(f"{'─'*60}")
-    if _hit is None:
-        print(f"  N = {_n_cfg} was not reached (fits stopped at N = {len(aic_history)}). "
-              f"Raise --max_components.")
-    else:
-        _n_h, _aic_h, _rms_h, _maxr_h, _white_h = _hit
-        print(f"  N = {_n_cfg}:  AIC = {_aic_h:.2f}   RMS resid = {_rms_h:.5f}   "
-              f"max|resid| = {_maxr_h:.5f}   white = {'YES' if _white_h else 'no'}")
-        print(f"  AIC-preferred N = {best_n} (ΔAIC = {_aic_h - best_aic:+.2f} for the "
-              f"config's N)")
-        print(f"  off-pulse 3σ = {3*off_pulse_rms:.5f}")
-        if _white_h:
-            print(f"  [OK]   N = {_n_cfg} already leaves white residuals — the extra "
-                  f"components AIC prefers are fitting structure at or below the noise. "
-                  f"Four components remain an adequate description.")
-        elif _maxr_h < 6 * off_pulse_rms:
-            print(f"  [WARN] N = {_n_cfg} leaves residuals at "
-                  f"{_maxr_h/off_pulse_rms:.1f}σ (not white, but within 6σ). Defensible "
-                  f"for the simulator, though real structure is being absorbed into the "
-                  f"four components. Compare the fitted kappas against the config's "
-                  f"nuisance priors.")
+        print(f"\n{'─'*60}")
+        print(f"  CONFIG COMPONENT COUNT CHECK  (config declares N = {_n_cfg})")
+        print(f"{'─'*60}")
+        if _hit is None:
+            print(f"  N = {_n_cfg} was not reached (fits stopped at N = {len(aic_history)}). "
+                  f"Raise --max_components.")
         else:
-            print(f"  [FAIL] N = {_n_cfg} leaves {_maxr_h/off_pulse_rms:.1f}σ residuals. "
-                  f"This profile is not well described by {_n_cfg} components — adding "
-                  f"components to the config is a real change to the forward model and "
-                  f"invalidates existing posteriors (the theta vector gains parameters).")
-        print(f"\n  Re-run with --force_n_components {_n_cfg} to fit exactly the config's "
-              f"count and compare phase centres directly.")
+            _n_h, _aic_h, _rms_h, _maxr_h, _white_h = _hit
+            print(f"  N = {_n_cfg}:  AIC = {_aic_h:.2f}   RMS resid = {_rms_h:.5f}   "
+                  f"max|resid| = {_maxr_h:.5f}   white = {'YES' if _white_h else 'no'}")
+            print(f"  AIC-preferred N = {best_n} (ΔAIC = {_aic_h - best_aic:+.2f} for the "
+                  f"config's N)")
+            print(f"  off-pulse 3σ = {3*off_pulse_rms:.5f}")
+            if _white_h:
+                print(f"  [OK]   N = {_n_cfg} already leaves white residuals — the extra "
+                      f"components AIC prefers are fitting structure at or below the noise. "
+                      f"Four components remain an adequate description.")
+            elif _maxr_h < 6 * off_pulse_rms:
+                print(f"  [WARN] N = {_n_cfg} leaves residuals at "
+                      f"{_maxr_h/off_pulse_rms:.1f}σ (not white, but within 6σ). Defensible "
+                      f"for the simulator, though real structure is being absorbed into the "
+                      f"four components. Compare the fitted kappas against the config's "
+                      f"nuisance priors.")
+            else:
+                print(f"  [FAIL] N = {_n_cfg} leaves {_maxr_h/off_pulse_rms:.1f}σ residuals. "
+                      f"This profile is not well described by {_n_cfg} components — adding "
+                      f"components to the config is a real change to the forward model and "
+                      f"invalidates existing posteriors (the theta vector gains parameters).")
+            print(f"\n  Re-run with --force_n_components {_n_cfg} to fit exactly the config's "
+                  f"count and compare phase centres directly.")
 
 
     # ─────────────────────────────────────────────────────────────────────────────
@@ -2176,11 +2192,6 @@ def main(argv=None):
               f"{'FWHM':>6}  {'σ_mu':>5}  {'amp σ':>7}  flags")
     print(header)
     print(f"  {'─'*2}  {'─'*7}  {'─'*12}  {'─'*8}  {'─'*7}  {'─'*6}  {'─'*5}  {'─'*7}  {'─'*5}")
-
-
-    def _fwhm_of(k):
-        return 2*np.arccos(max(1 - np.log(2)/max(k, 1e-9), -1.0))/(2*np.pi)*N_BINS
-
 
     for i, c in enumerate(components):
         sig   = c["A"] / off_pulse_rms if off_pulse_rms > 0 else np.inf
@@ -2245,382 +2256,385 @@ def main(argv=None):
     # biased because ToA and DM covary. That is what this section checks.
     # ─────────────────────────────────────────────────────────────────────────────
 
-    _cfg_comps = cfg.components
-    _toa_spec  = next((p for p in list(cfg.inferred) + list(cfg.nuisance)
-                       if p.name == "toa"), None)
-
-    print(f"{'═'*60}")
-    print(f"  PHASE OFFSET vs CONFIG  ({os.path.basename(cfg.path)})")
-    print(f"{'═'*60}")
-
-    # PHASES come from the frequency-scrunched fit; WIDTHS and AMPLITUDES from the
-    # reference window. They are different questions and want different estimators.
-    #
-    # Every component has spectral_index_center = 0.0, so a component's phase does
-    # NOT depend on frequency: there is nothing for a reference-frequency fit to
-    # measure that the band average does not measure better. Residual dedispersion
-    # does shift the band-averaged phase, but it shifts every component by the same
-    # DM, so the DIFFERENCES between phase centres — the only physical part, since a
-    # constant is degenerate with toa — survive. The fscrunched profile averages all
-    # n_chan channels, so it has sqrt(n_chan/ref_window) times the S/N.
-    #
-    # An earlier version compared phases against the reference-window fit on the
-    # grounds that the config's values are "defined at reference_freq_mhz". That is
-    # true of amplitude_ref and concentration_ref, which really are frequency
-    # dependent — but not of phase_center_ref, and the noise cost was severe: on
-    # DE602 the 5-channel fit fell into the main-peak-splitting degeneracy and
-    # reported a 71-sigma phase disagreement that its own fscrunched fit did not
-    # show.
-    _fit_comps = components
-    print(f"  Phases from the FREQUENCY-SCRUNCHED fit (all {cfg.n_chan} channels): "
-          f"spectral_index_center is 0, so phase centres carry no frequency "
-          f"dependence, and this has the best S/N.")
-    if comps_rc is not None:
-        _rf = (archive_freqs if archive_freqs is not None else cfg.freqs_mhz)
-        print(f"  Widths/amplitudes from the REFERENCE-WINDOW fit (channels "
-              f"{ref_lo}–{ref_hi-1}, {_rf[ref_lo]:.3f}–{_rf[ref_hi-1]:.3f} MHz), "
-              f"which is where the config defines them.")
-
-    def _wrap(x):
-        """Wrap a phase difference into (-0.5, 0.5]."""
-        return (np.asarray(x) + 0.5) % 1.0 - 0.5
-
-
-    if not _fit_comps or not _cfg_comps:
-        print("  Nothing to compare (no fitted or no configured components).")
-        _pairs, _matched, mean_off, resid = [], [], 0.0, np.array([])
-        anchor_off, _n_cmp = 0.0, 0
+    if cfg is None:
+        print("\n  No --config: the comparison with a config's components is skipped.")
     else:
-        # Pairing. `components` is sorted by amplitude; the config is in declaration
-        # order. Matching by position is therefore wrong in general.
+        _cfg_comps = cfg.components
+        _toa_spec  = next((p for p in list(cfg.inferred) + list(cfg.nuisance)
+                           if p.name == "toa"), None)
+
+        print(f"{'═'*60}")
+        print(f"  PHASE OFFSET vs CONFIG  ({os.path.basename(cfg.path)})")
+        print(f"{'═'*60}")
+
+        # PHASES come from the frequency-scrunched fit; WIDTHS and AMPLITUDES from the
+        # reference window. They are different questions and want different estimators.
         #
-        # Anchor instead on the config's reference_component, which is by definition
-        # the brightest — so it corresponds to fitted component 0. That fixes the
-        # constant offset, after which every other config component is matched to
-        # its nearest fitted component in phase.
-        _ref_i = [c.name for c in _cfg_comps].index(cfg.reference_component)
-
-        if args.seed_from_config:
-            # Component i IS config component i by construction, so no phase
-            # matching is needed — and none should be attempted, since matching is
-            # free to re-order and would hide a component that genuinely moved.
-            anchor_off = float(_wrap(_fit_comps[_ref_i]["mu"] / N_BINS
-                                     - float(_cfg_comps[_ref_i].phase_center_ref)))
-            _pairs = [(cc, _fit_comps[i],
-                       float(_wrap(_fit_comps[i]["mu"] / N_BINS
-                                   - float(cc.phase_center_ref))))
-                      for i, cc in enumerate(_cfg_comps)]
-            print(f"  Pairing is by construction (--seed_from_config): fitted "
-                  f"component i is config component i.")
-        else:
-            anchor_off = float(_wrap(_fit_comps[0]["mu"] / N_BINS
-                                     - float(_cfg_comps[_ref_i].phase_center_ref)))
-
-            _used, _pairs = set(), []
-            for ci, cc in enumerate(_cfg_comps):
-                target = float(cc.phase_center_ref) + anchor_off
-                best, best_d = None, None
-                for fi, fc in enumerate(_fit_comps):
-                    if fi in _used:
-                        continue
-                    d = abs(float(_wrap(fc["mu"] / N_BINS - target)))
-                    if best_d is None or d < best_d:
-                        best, best_d = fi, d
-                if best is None:
-                    _pairs.append((cc, None, np.nan))
-                else:
-                    _used.add(best)
-                    off = float(_wrap(_fit_comps[best]["mu"] / N_BINS
-                                      - float(cc.phase_center_ref)))
-                    _pairs.append((cc, _fit_comps[best], off))
-
-            print(f"  Pairing anchored on reference_component "
-                  f"'{cfg.reference_component}' (assumed brightest); others matched "
-                  f"by nearest phase. --seed_from_config removes this guesswork.")
-        if len(_fit_comps) != len(_cfg_comps):
-            print(f"  [WARN] fit found {len(_fit_comps)} components, config declares "
-                  f"{len(_cfg_comps)}. Check the pairing below before trusting it.")
-        print()
-        print(f"  {'component':<10} {'config phase':>13} {'fitted phase':>13} "
-              f"{'offset':>10} {'Δ vs anchor':>12}")
-        print(f"  {'─'*10} {'─'*13} {'─'*13} {'─'*10} {'─'*12}")
-        for cc, fc, off in _pairs:
-            if fc is None:
-                print(f"  {cc.name:<10} {float(cc.phase_center_ref):>13.8f} "
-                      f"{'—':>13} {'—':>10} {'unmatched':>12}")
-                continue
-            print(f"  {cc.name:<10} {float(cc.phase_center_ref):>13.8f} "
-                  f"{fc['mu']/N_BINS:>13.8f} {off:>+10.6f} {off-anchor_off:>+12.6f}")
-
-        _matched = [(cc, fc, off) for cc, fc, off in _pairs if fc is not None]
-        offsets  = np.array([off for _, _, off in _matched])
-        mean_off = anchor_off          # the anchor defines the constant, not the mean
-        resid    = offsets - mean_off
-        _n_cmp   = len(_matched)
-
-        print(f"\n  constant offset (from anchor) : {mean_off:+.6f} phase "
-              f"= {mean_off * cfg.period_ms * 1000:+.2f} μs")
-        print(f"  relative-phase residual (after removing the constant):")
-        print(f"    max|resid| = {np.abs(resid).max():.6f} phase "
-              f"= {np.abs(resid).max() * cfg.period_ms * 1000:.2f} μs "
-              f"= {np.abs(resid).max() * N_BINS:.2f} bins")
-
-        if _toa_spec is not None:
-            lim = min(abs(_toa_spec.low), abs(_toa_spec.high))
-            print(f"\n  toa prior: U[{_toa_spec.low}, {_toa_spec.high}] phase "
-                  f"(±{lim * cfg.period_ms * 1000:.1f} μs)")
-            if abs(mean_off) < 0.5 * lim:
-                print(f"  [OK]   |mean offset| = {abs(mean_off):.4f} < half the prior "
-                      f"half-width ({0.5*lim:.4f}). The constant offset is absorbed by "
-                      f"toa with margin — the config's phase centres are usable as they are.")
-            elif abs(mean_off) < lim:
-                print(f"  [WARN] |mean offset| = {abs(mean_off):.4f} is inside the prior "
-                      f"(±{lim}) but uses {100*abs(mean_off)/lim:.0f}% of it. The true toa "
-                      f"will sit near the boundary, which biases DM through the ToA–DM "
-                      f"covariance. Re-centre with --recentre-on {_cfg_comps[0].name}.")
-            else:
-                print(f"  [FAIL] |mean offset| = {abs(mean_off):.4f} EXCEEDS the toa prior "
-                      f"(±{lim}). The true toa is unreachable; the posterior will pile up "
-                      f"on the boundary and DM will be biased. Re-centre the phase centres "
-                      f"with --recentre-on {_cfg_comps[0].name} — do NOT simply widen the "
-                      f"toa prior, which costs ToA precision and risks phase wrap.")
-
-        # Is the SHAPE different, i.e. beyond the fit's own uncertainty?
-        _dmu_phase = np.array([fc["dmu"] / N_BINS for _, fc, _ in _matched])
-        if np.all(_dmu_phase > 0):
-            _worst = np.abs(resid) / _dmu_phase
-            print(f"\n  relative residual in units of the fit's own σ_mu: "
-                  f"max {_worst.max():.1f}σ")
-            if _worst.max() < 3:
-                print(f"  [OK]   relative phases agree with the config within 3σ — the "
-                      f"profile shape carries over, only the constant offset differs.")
-            else:
-                print(f"  [NOTE] relative phases differ by >3σ. That is a genuinely "
-                      f"different profile geometry, not a folding convention, so the "
-                      f"config's phase centres need updating (not just re-centring).")
-
-        # ── Do the fitted values sit inside the config's PRIORS? ─────────────────
+        # Every component has spectral_index_center = 0.0, so a component's phase does
+        # NOT depend on frequency: there is nothing for a reference-frequency fit to
+        # measure that the band average does not measure better. Residual dedispersion
+        # does shift the band-averaged phase, but it shifts every component by the same
+        # DM, so the DIFFERENCES between phase centres — the only physical part, since a
+        # constant is degenerate with toa — survive. The fscrunched profile averages all
+        # n_chan channels, so it has sqrt(n_chan/ref_window) times the S/N.
         #
-        # A single-epoch fit cannot set a prior — it measures one realisation of a
-        # parameter that is sampled over a range. But it can show that a prior is
-        # in the wrong place: a fitted value outside its bounds, or hugging an edge,
-        # means the sampler can never reproduce this observation and the posterior
-        # will pile up against that boundary.
-        print(f"\n{'─'*60}")
-        print(f"  FITTED VALUES vs CONFIG PRIORS  (reference channel)")
-        print(f"{'─'*60}")
-        print(f"  {'component':<10} {'field':<14} {'fitted':>9} {'prior':>16} "
-              f"{'% up':>6}  status")
-        print(f"  {'─'*10} {'─'*14} {'─'*9} {'─'*16} {'─'*6}  {'─'*6}")
+        # An earlier version compared phases against the reference-window fit on the
+        # grounds that the config's values are "defined at reference_freq_mhz". That is
+        # true of amplitude_ref and concentration_ref, which really are frequency
+        # dependent — but not of phase_center_ref, and the noise cost was severe: on
+        # DE602 the 5-channel fit fell into the main-peak-splitting degeneracy and
+        # reported a 71-sigma phase disagreement that its own fscrunched fit did not
+        # show.
+        _fit_comps = components
+        print(f"  Phases from the FREQUENCY-SCRUNCHED fit (all {cfg.n_chan} channels): "
+              f"spectral_index_center is 0, so phase centres carry no frequency "
+              f"dependence, and this has the best S/N.")
+        if comps_rc is not None:
+            _rf = (archive_freqs if archive_freqs is not None else cfg.freqs_mhz)
+            print(f"  Widths/amplitudes from the REFERENCE-WINDOW fit (channels "
+                  f"{ref_lo}–{ref_hi-1}, {_rf[ref_lo]:.3f}–{_rf[ref_hi-1]:.3f} MHz), "
+                  f"which is where the config defines them.")
 
-        _prior_flags = []
-        for cc, fc, _o in _matched:
-            # Widths and amplitudes ARE frequency dependent, so take them from the
-            # reference-window fit — matched to this component by phase, since that
-            # fit is run separately and its component order need not agree.
-            _rc = fc
-            if comps_rc is not None:
-                _rc = min(comps_rc,
-                          key=lambda q: abs(float(_wrap(q["mu"]/N_BINS - fc["mu"]/N_BINS))))
-                if abs(float(_wrap(_rc["mu"]/N_BINS - fc["mu"]/N_BINS))) * N_BINS > 15:
-                    _rc = fc      # no credible counterpart; fall back, flagged below
-                    print(f"  [NOTE] {cc.name}: no reference-window counterpart within "
-                          f"15 bins; width/amplitude below are band-averaged.")
-            for _field, _val in (("concentration_ref", _rc["k"]),
-                                 ("amplitude_ref",     _rc["amp_rel"])):
-                _spec = getattr(cc, _field)
-                if not (isinstance(_spec, str) and _spec.startswith("$")):
-                    continue   # a literal, not a sampled parameter — nothing to check
-                _p = next(p for p in list(cfg.inferred) + list(cfg.nuisance)
-                          if p.name == _spec[1:])
-                _pct = (_val - _p.low) / (_p.high - _p.low) * 100.0
-                if _val < _p.low or _val > _p.high:
-                    _st = "OUTSIDE PRIOR"
-                    _prior_flags.append((cc.name, _p.name, _val, _p.low, _p.high, "outside"))
-                elif _pct < 5 or _pct > 95:
-                    _st = "at edge"
-                    _prior_flags.append((cc.name, _p.name, _val, _p.low, _p.high, "edge"))
-                else:
-                    _st = "ok"
-                print(f"  {cc.name:<10} {_field:<14} {_val:>9.3f} "
-                      f"{'U[%g, %g]' % (_p.low, _p.high):>16} {_pct:>6.1f}  {_st}")
+        def _wrap(x):
+            """Wrap a phase difference into (-0.5, 0.5]."""
+            return (np.asarray(x) + 0.5) % 1.0 - 0.5
 
-        if _prior_flags:
-            print()
-            for _cn, _pn, _v, _lo, _hi, _kind in _prior_flags:
-                if _kind == "outside":
-                    print(f"  [FAIL] {_cn}: fitted {_v:.3f} is OUTSIDE {_pn} "
-                          f"U[{_lo:g}, {_hi:g}]. The simulator can never draw this "
-                          f"value, so the posterior will jam against the bound and "
-                          f"bias everything it covaries with. Widen {_pn}.")
-                else:
-                    print(f"  [WARN] {_cn}: fitted {_v:.3f} hugs an edge of {_pn} "
-                          f"U[{_lo:g}, {_hi:g}]. Little room on one side — check "
-                          f"more epochs before trusting this prior.")
+
+        if not _fit_comps or not _cfg_comps:
+            print("  Nothing to compare (no fitted or no configured components).")
+            _pairs, _matched, mean_off, resid = [], [], 0.0, np.array([])
+            anchor_off, _n_cmp = 0.0, 0
         else:
-            print(f"\n  [OK]   every fitted value sits comfortably inside its prior.")
+            # Pairing. `components` is sorted by amplitude; the config is in declaration
+            # order. Matching by position is therefore wrong in general.
+            #
+            # Anchor instead on the config's reference_component, which is by definition
+            # the brightest — so it corresponds to fitted component 0. That fixes the
+            # constant offset, after which every other config component is matched to
+            # its nearest fitted component in phase.
+            _ref_i = [c.name for c in _cfg_comps].index(cfg.reference_component)
 
-        # ── The actual question: are the COMPONENT SEPARATIONS preserved? ────────
-        # Separations are measured from the reference component, so they are
-        # independent of the constant offset / folding convention entirely.
-        _ref_pair = next(((cc, fc, o) for cc, fc, o in _matched
-                          if cc.name == cfg.reference_component), None)
-        if _ref_pair is not None and len(_matched) > 1:
-            _rc_cfg = float(_ref_pair[0].phase_center_ref)
-            _rc_fit = _ref_pair[1]["mu"] / N_BINS
-            print(f"\n{'─'*60}")
-            print(f"  COMPONENT SEPARATIONS from '{cfg.reference_component}'")
-            print(f"  (independent of the constant offset — this is the profile geometry)")
-            print(f"{'─'*60}")
-            print(f"  {'component':<10} {'config':>11} {'fitted':>11} "
-                  f"{'Δ (phase)':>11} {'Δ (bins)':>9} {'Δ (μs)':>9} {'σ_sep':>7} {'Δ/σ':>6}")
-            print(f"  {'─'*10} {'─'*11} {'─'*11} {'─'*11} {'─'*9} {'─'*9} "
-                  f"{'─'*7} {'─'*6}")
-            _worst_sep  = 0.0
-            _worst_nsig = 0.0
-            _worst_frac = 0.0     # |Δ| as a fraction of the component's OWN width
-            _ref_dmu    = _ref_pair[1]["dmu"]
-            for cc, fc, _o in _matched:
-                if cc.name == cfg.reference_component:
-                    continue
-                s_cfg = float(_wrap(float(cc.phase_center_ref) - _rc_cfg))
-                s_fit = float(_wrap(fc["mu"] / N_BINS - _rc_fit))
-                d     = s_fit - s_cfg
-                # A separation is a difference of two fitted centres, so its
-                # uncertainty is theirs in quadrature. Judging Δ in bins alone
-                # punishes a weak, broad component for being hard to localise.
-                sig   = float(np.hypot(fc["dmu"], _ref_dmu))
-                nsig  = abs(d) * N_BINS / sig if sig > 0 else np.inf
-                _worst_sep  = max(_worst_sep, abs(d))
-                _worst_nsig = max(_worst_nsig, nsig)
-                _worst_frac = max(_worst_frac,
-                                  abs(d) * N_BINS / max(_fwhm_of(fc["k"]), 1e-9))
-                print(f"  {cc.name:<10} {s_cfg:>+11.6f} {s_fit:>+11.6f} "
-                      f"{d:>+11.6f} {d*N_BINS:>+9.2f} {d*cfg.period_ms*1000:>+9.1f} "
-                      f"{sig:>7.2f} {nsig:>6.1f}")
-            print(f"\n  worst separation change: {_worst_sep:.6f} phase "
-                  f"= {_worst_sep*N_BINS:.2f} bins = {_worst_sep*cfg.period_ms*1000:.1f} μs"
-                  f"  ({_worst_nsig:.1f}σ)")
-            print(f"  σ_sep = the two fitted centres' σ_mu in quadrature, in bins.")
+            if args.seed_from_config:
+                # Component i IS config component i by construction, so no phase
+                # matching is needed — and none should be attempted, since matching is
+                # free to re-order and would hide a component that genuinely moved.
+                anchor_off = float(_wrap(_fit_comps[_ref_i]["mu"] / N_BINS
+                                         - float(_cfg_comps[_ref_i].phase_center_ref)))
+                _pairs = [(cc, _fit_comps[i],
+                           float(_wrap(_fit_comps[i]["mu"] / N_BINS
+                                       - float(cc.phase_center_ref))))
+                          for i, cc in enumerate(_cfg_comps)]
+                print(f"  Pairing is by construction (--seed_from_config): fitted "
+                      f"component i is config component i.")
+            else:
+                anchor_off = float(_wrap(_fit_comps[0]["mu"] / N_BINS
+                                         - float(_cfg_comps[_ref_i].phase_center_ref)))
 
+                _used, _pairs = set(), []
+                for ci, cc in enumerate(_cfg_comps):
+                    target = float(cc.phase_center_ref) + anchor_off
+                    best, best_d = None, None
+                    for fi, fc in enumerate(_fit_comps):
+                        if fi in _used:
+                            continue
+                        d = abs(float(_wrap(fc["mu"] / N_BINS - target)))
+                        if best_d is None or d < best_d:
+                            best, best_d = fi, d
+                    if best is None:
+                        _pairs.append((cc, None, np.nan))
+                    else:
+                        _used.add(best)
+                        off = float(_wrap(_fit_comps[best]["mu"] / N_BINS
+                                          - float(cc.phase_center_ref)))
+                        _pairs.append((cc, _fit_comps[best], off))
+
+                print(f"  Pairing anchored on reference_component "
+                      f"'{cfg.reference_component}' (assumed brightest); others matched "
+                      f"by nearest phase. --seed_from_config removes this guesswork.")
             if len(_fit_comps) != len(_cfg_comps):
-                # With more fitted components than the config declares, the extra
-                # ones are usually noise spikes or a second term describing one
-                # peak's shape. Nearest-phase matching then pairs a config component
-                # against the wrong thing and the "separation change" is an artefact
-                # of the pairing, not a measurement. Do not render a verdict.
-                print(f"  [SKIP] verdict withheld: the fit has {len(_fit_comps)} "
-                      f"components against the config's {len(_cfg_comps)}, so this "
-                      f"pairing is unreliable.")
-                print(f"         Re-run with --force_n_components {len(_cfg_comps)} "
-                      f"for a like-for-like comparison.")
-            elif _worst_nsig < 3.0:
-                print(f"  [OK]   every separation agrees with the config within "
-                      f"{_worst_nsig:.1f}σ of the fit's own precision. The profile "
-                      f"geometry carries over: re-centre the whole set on "
-                      f"'{cfg.reference_component}' and the config's component "
-                      f"structure is reusable.")
-            elif _worst_frac < 0.3:
-                print(f"  [WARN] separations differ by up to {_worst_nsig:.1f}σ "
-                      f"({_worst_sep*N_BINS:.1f} bins) — formally significant, but only "
-                      f"{100*_worst_frac:.0f}% of the shifted component's own width, so "
-                      f"this is recognisably the same decomposition, measured more "
-                      f"precisely. Paste the fitted centres in rather than reusing the "
-                      f"old values; the component structure itself carries over.")
-            else:
-                print(f"  [FAIL] separations differ by up to {_worst_nsig:.1f}σ "
-                      f"({_worst_sep*N_BINS:.1f} bins = {100*_worst_frac:.0f}% of the "
-                      f"component's own width). Either the fit found a different solution "
-                      f"(check the pairing and component count above) or the profile "
-                      f"genuinely differs — do not reuse the config's phase centres.")
-            print(f"  worst shift as a fraction of its own component width: "
-                  f"{_worst_frac:.2f}")
-    print()
-
-    if args.emit_yaml:
-        if not _matched:
-            print("Nothing to emit — no config component could be paired with a fitted one.")
-            sys.exit(1)
-
-        shift = 0.0
-        if args.recentre_on:
-            # Use the SAME phase-matched pairing as the table above, not positional
-            # order: `components` is sorted by amplitude while the config is in
-            # declaration order, so indexing them together is wrong in general.
-            _hit = next(((cc, fc, off) for cc, fc, off in _matched
-                         if cc.name == args.recentre_on), None)
-            if _hit is None:
-                _names   = [c.name for c in _cfg_comps]
-                _matched_names = [cc.name for cc, _, _ in _matched]
-                if args.recentre_on not in _names:
-                    print(f"ERROR: --recentre-on '{args.recentre_on}' is not a component "
-                          f"in {os.path.basename(cfg.path)}. Choose from: "
-                          f"{', '.join(_names)}")
-                else:
-                    print(f"ERROR: config component '{args.recentre_on}' was not matched "
-                          f"to any fitted component. Matched: {', '.join(_matched_names)}")
-                sys.exit(1)
-            shift = _hit[2]
-
-        print(f"{'═'*60}")
-        print(f"  components: BLOCK FOR {os.path.basename(cfg.path)}")
-        print(f"{'═'*60}")
-        print(f"# Fitted from: {os.path.basename(args.infile)}")
-        print(f"# amplitude_ref / concentration_ref below are defined AT "
-              f"reference_freq_mhz = {REF_FREQ_MHZ:.11f}")
-        print(f"# (channel {ref_idx}). Do not paste these into a config with a different"
-              f"\n# reference frequency without re-expressing them via the spectral indices.")
-        if args.recentre_on:
-            print(f"# Re-centred on '{args.recentre_on}': {shift:+.8f} phase subtracted from")
-            print(f"# every centre, so relative phases are preserved and toa stays near 0.")
-        print("components:")
-        for cc, fc, _off in _matched:
-            phase = (fc["mu"] / N_BINS - shift) % 1.0
-            # Keep the config's existing $refs for the free fields — the fit measures
-            # this epoch's realisation of them, not their priors.
-            print(f"  - name:                  {cc.name}")
-            print(f"    amplitude_ref:         {cc.amplitude_ref}"
-                  f"        # fitted this epoch: {fc['amp_rel']:.4f}")
-            print(f"    phase_center_ref:      {phase:.8f}")
-            print(f"    concentration_ref:     {cc.concentration_ref}"
-                  f"        # fitted this epoch: {fc['k']:.1f}")
-            print(f"    spectral_index_amp:    {cc.spectral_index_amp}")
-            print(f"    spectral_index_width:  {cc.spectral_index_width}")
-            print(f"    spectral_index_center: {cc.spectral_index_center}")
-            print(f"    sigma_broadening_bins: {cc.sigma_broadening_bins}")
+                print(f"  [WARN] fit found {len(_fit_comps)} components, config declares "
+                      f"{len(_cfg_comps)}. Check the pairing below before trusting it.")
             print()
-        print("# NOTE: amplitude_ref / concentration_ref keep the config's existing")
-        print("#       literals and $refs. A single-epoch fit measures ONE realisation of")
-        print("#       parameters that are sampled over a prior, so it cannot set them —")
-        print("#       use the 'fitted this epoch' comments to sanity-check that the priors")
-        print("#       actually bracket the observed values.")
+            print(f"  {'component':<10} {'config phase':>13} {'fitted phase':>13} "
+                  f"{'offset':>10} {'Δ vs anchor':>12}")
+            print(f"  {'─'*10} {'─'*13} {'─'*13} {'─'*10} {'─'*12}")
+            for cc, fc, off in _pairs:
+                if fc is None:
+                    print(f"  {cc.name:<10} {float(cc.phase_center_ref):>13.8f} "
+                          f"{'—':>13} {'—':>10} {'unmatched':>12}")
+                    continue
+                print(f"  {cc.name:<10} {float(cc.phase_center_ref):>13.8f} "
+                      f"{fc['mu']/N_BINS:>13.8f} {off:>+10.6f} {off-anchor_off:>+12.6f}")
+
+            _matched = [(cc, fc, off) for cc, fc, off in _pairs if fc is not None]
+            offsets  = np.array([off for _, _, off in _matched])
+            mean_off = anchor_off          # the anchor defines the constant, not the mean
+            resid    = offsets - mean_off
+            _n_cmp   = len(_matched)
+
+            print(f"\n  constant offset (from anchor) : {mean_off:+.6f} phase "
+                  f"= {mean_off * cfg.period_ms * 1000:+.2f} μs")
+            print(f"  relative-phase residual (after removing the constant):")
+            print(f"    max|resid| = {np.abs(resid).max():.6f} phase "
+                  f"= {np.abs(resid).max() * cfg.period_ms * 1000:.2f} μs "
+                  f"= {np.abs(resid).max() * N_BINS:.2f} bins")
+
+            if _toa_spec is not None:
+                lim = min(abs(_toa_spec.low), abs(_toa_spec.high))
+                print(f"\n  toa prior: U[{_toa_spec.low}, {_toa_spec.high}] phase "
+                      f"(±{lim * cfg.period_ms * 1000:.1f} μs)")
+                if abs(mean_off) < 0.5 * lim:
+                    print(f"  [OK]   |mean offset| = {abs(mean_off):.4f} < half the prior "
+                          f"half-width ({0.5*lim:.4f}). The constant offset is absorbed by "
+                          f"toa with margin — the config's phase centres are usable as they are.")
+                elif abs(mean_off) < lim:
+                    print(f"  [WARN] |mean offset| = {abs(mean_off):.4f} is inside the prior "
+                          f"(±{lim}) but uses {100*abs(mean_off)/lim:.0f}% of it. The true toa "
+                          f"will sit near the boundary, which biases DM through the ToA–DM "
+                          f"covariance. Re-centre with --recentre-on {_cfg_comps[0].name}.")
+                else:
+                    print(f"  [FAIL] |mean offset| = {abs(mean_off):.4f} EXCEEDS the toa prior "
+                          f"(±{lim}). The true toa is unreachable; the posterior will pile up "
+                          f"on the boundary and DM will be biased. Re-centre the phase centres "
+                          f"with --recentre-on {_cfg_comps[0].name} — do NOT simply widen the "
+                          f"toa prior, which costs ToA precision and risks phase wrap.")
+
+            # Is the SHAPE different, i.e. beyond the fit's own uncertainty?
+            _dmu_phase = np.array([fc["dmu"] / N_BINS for _, fc, _ in _matched])
+            if np.all(_dmu_phase > 0):
+                _worst = np.abs(resid) / _dmu_phase
+                print(f"\n  relative residual in units of the fit's own σ_mu: "
+                      f"max {_worst.max():.1f}σ")
+                if _worst.max() < 3:
+                    print(f"  [OK]   relative phases agree with the config within 3σ — the "
+                          f"profile shape carries over, only the constant offset differs.")
+                else:
+                    print(f"  [NOTE] relative phases differ by >3σ. That is a genuinely "
+                          f"different profile geometry, not a folding convention, so the "
+                          f"config's phase centres need updating (not just re-centring).")
+
+            # ── Do the fitted values sit inside the config's PRIORS? ─────────────────
+            #
+            # A single-epoch fit cannot set a prior — it measures one realisation of a
+            # parameter that is sampled over a range. But it can show that a prior is
+            # in the wrong place: a fitted value outside its bounds, or hugging an edge,
+            # means the sampler can never reproduce this observation and the posterior
+            # will pile up against that boundary.
+            print(f"\n{'─'*60}")
+            print(f"  FITTED VALUES vs CONFIG PRIORS  (reference channel)")
+            print(f"{'─'*60}")
+            print(f"  {'component':<10} {'field':<14} {'fitted':>9} {'prior':>16} "
+                  f"{'% up':>6}  status")
+            print(f"  {'─'*10} {'─'*14} {'─'*9} {'─'*16} {'─'*6}  {'─'*6}")
+
+            _prior_flags = []
+            for cc, fc, _o in _matched:
+                # Widths and amplitudes ARE frequency dependent, so take them from the
+                # reference-window fit — matched to this component by phase, since that
+                # fit is run separately and its component order need not agree.
+                _rc = fc
+                if comps_rc is not None:
+                    _rc = min(comps_rc,
+                              key=lambda q: abs(float(_wrap(q["mu"]/N_BINS - fc["mu"]/N_BINS))))
+                    if abs(float(_wrap(_rc["mu"]/N_BINS - fc["mu"]/N_BINS))) * N_BINS > 15:
+                        _rc = fc      # no credible counterpart; fall back, flagged below
+                        print(f"  [NOTE] {cc.name}: no reference-window counterpart within "
+                              f"15 bins; width/amplitude below are band-averaged.")
+                for _field, _val in (("concentration_ref", _rc["k"]),
+                                     ("amplitude_ref",     _rc["amp_rel"])):
+                    _spec = getattr(cc, _field)
+                    if not (isinstance(_spec, str) and _spec.startswith("$")):
+                        continue   # a literal, not a sampled parameter — nothing to check
+                    _p = next(p for p in list(cfg.inferred) + list(cfg.nuisance)
+                              if p.name == _spec[1:])
+                    _pct = (_val - _p.low) / (_p.high - _p.low) * 100.0
+                    if _val < _p.low or _val > _p.high:
+                        _st = "OUTSIDE PRIOR"
+                        _prior_flags.append((cc.name, _p.name, _val, _p.low, _p.high, "outside"))
+                    elif _pct < 5 or _pct > 95:
+                        _st = "at edge"
+                        _prior_flags.append((cc.name, _p.name, _val, _p.low, _p.high, "edge"))
+                    else:
+                        _st = "ok"
+                    print(f"  {cc.name:<10} {_field:<14} {_val:>9.3f} "
+                          f"{'U[%g, %g]' % (_p.low, _p.high):>16} {_pct:>6.1f}  {_st}")
+
+            if _prior_flags:
+                print()
+                for _cn, _pn, _v, _lo, _hi, _kind in _prior_flags:
+                    if _kind == "outside":
+                        print(f"  [FAIL] {_cn}: fitted {_v:.3f} is OUTSIDE {_pn} "
+                              f"U[{_lo:g}, {_hi:g}]. The simulator can never draw this "
+                              f"value, so the posterior will jam against the bound and "
+                              f"bias everything it covaries with. Widen {_pn}.")
+                    else:
+                        print(f"  [WARN] {_cn}: fitted {_v:.3f} hugs an edge of {_pn} "
+                              f"U[{_lo:g}, {_hi:g}]. Little room on one side — check "
+                              f"more epochs before trusting this prior.")
+            else:
+                print(f"\n  [OK]   every fitted value sits comfortably inside its prior.")
+
+            # ── The actual question: are the COMPONENT SEPARATIONS preserved? ────────
+            # Separations are measured from the reference component, so they are
+            # independent of the constant offset / folding convention entirely.
+            _ref_pair = next(((cc, fc, o) for cc, fc, o in _matched
+                              if cc.name == cfg.reference_component), None)
+            if _ref_pair is not None and len(_matched) > 1:
+                _rc_cfg = float(_ref_pair[0].phase_center_ref)
+                _rc_fit = _ref_pair[1]["mu"] / N_BINS
+                print(f"\n{'─'*60}")
+                print(f"  COMPONENT SEPARATIONS from '{cfg.reference_component}'")
+                print(f"  (independent of the constant offset — this is the profile geometry)")
+                print(f"{'─'*60}")
+                print(f"  {'component':<10} {'config':>11} {'fitted':>11} "
+                      f"{'Δ (phase)':>11} {'Δ (bins)':>9} {'Δ (μs)':>9} {'σ_sep':>7} {'Δ/σ':>6}")
+                print(f"  {'─'*10} {'─'*11} {'─'*11} {'─'*11} {'─'*9} {'─'*9} "
+                      f"{'─'*7} {'─'*6}")
+                _worst_sep  = 0.0
+                _worst_nsig = 0.0
+                _worst_frac = 0.0     # |Δ| as a fraction of the component's OWN width
+                _ref_dmu    = _ref_pair[1]["dmu"]
+                for cc, fc, _o in _matched:
+                    if cc.name == cfg.reference_component:
+                        continue
+                    s_cfg = float(_wrap(float(cc.phase_center_ref) - _rc_cfg))
+                    s_fit = float(_wrap(fc["mu"] / N_BINS - _rc_fit))
+                    d     = s_fit - s_cfg
+                    # A separation is a difference of two fitted centres, so its
+                    # uncertainty is theirs in quadrature. Judging Δ in bins alone
+                    # punishes a weak, broad component for being hard to localise.
+                    sig   = float(np.hypot(fc["dmu"], _ref_dmu))
+                    nsig  = abs(d) * N_BINS / sig if sig > 0 else np.inf
+                    _worst_sep  = max(_worst_sep, abs(d))
+                    _worst_nsig = max(_worst_nsig, nsig)
+                    _worst_frac = max(_worst_frac,
+                                      abs(d) * N_BINS / max(_fwhm_of(fc["k"]), 1e-9))
+                    print(f"  {cc.name:<10} {s_cfg:>+11.6f} {s_fit:>+11.6f} "
+                          f"{d:>+11.6f} {d*N_BINS:>+9.2f} {d*cfg.period_ms*1000:>+9.1f} "
+                          f"{sig:>7.2f} {nsig:>6.1f}")
+                print(f"\n  worst separation change: {_worst_sep:.6f} phase "
+                      f"= {_worst_sep*N_BINS:.2f} bins = {_worst_sep*cfg.period_ms*1000:.1f} μs"
+                      f"  ({_worst_nsig:.1f}σ)")
+                print(f"  σ_sep = the two fitted centres' σ_mu in quadrature, in bins.")
+
+                if len(_fit_comps) != len(_cfg_comps):
+                    # With more fitted components than the config declares, the extra
+                    # ones are usually noise spikes or a second term describing one
+                    # peak's shape. Nearest-phase matching then pairs a config component
+                    # against the wrong thing and the "separation change" is an artefact
+                    # of the pairing, not a measurement. Do not render a verdict.
+                    print(f"  [SKIP] verdict withheld: the fit has {len(_fit_comps)} "
+                          f"components against the config's {len(_cfg_comps)}, so this "
+                          f"pairing is unreliable.")
+                    print(f"         Re-run with --force_n_components {len(_cfg_comps)} "
+                          f"for a like-for-like comparison.")
+                elif _worst_nsig < 3.0:
+                    print(f"  [OK]   every separation agrees with the config within "
+                          f"{_worst_nsig:.1f}σ of the fit's own precision. The profile "
+                          f"geometry carries over: re-centre the whole set on "
+                          f"'{cfg.reference_component}' and the config's component "
+                          f"structure is reusable.")
+                elif _worst_frac < 0.3:
+                    print(f"  [WARN] separations differ by up to {_worst_nsig:.1f}σ "
+                          f"({_worst_sep*N_BINS:.1f} bins) — formally significant, but only "
+                          f"{100*_worst_frac:.0f}% of the shifted component's own width, so "
+                          f"this is recognisably the same decomposition, measured more "
+                          f"precisely. Paste the fitted centres in rather than reusing the "
+                          f"old values; the component structure itself carries over.")
+                else:
+                    print(f"  [FAIL] separations differ by up to {_worst_nsig:.1f}σ "
+                          f"({_worst_sep*N_BINS:.1f} bins = {100*_worst_frac:.0f}% of the "
+                          f"component's own width). Either the fit found a different solution "
+                          f"(check the pairing and component count above) or the profile "
+                          f"genuinely differs — do not reuse the config's phase centres.")
+                print(f"  worst shift as a fraction of its own component width: "
+                      f"{_worst_frac:.2f}")
         print()
 
-        if archive_freqs is not None:
-            _d = np.diff(archive_freqs)
-            if _d.size and _d.std() > 0.01 * _d.mean():
-                _bw = _d.mean()
-                print(f"{'═'*60}")
-                print(f"  instrument: BLOCK — channels are unevenly spaced")
-                print(f"{'═'*60}")
-                print(f"  n_freq_channels:    {archive_freqs.size}")
-                print(f"  n_phase_bins:       {N_BINS}")
-                print(f"  freq_low_mhz:       {archive_freqs[0] - _bw/2:.6f}"
-                      f"   # first centre - half mean channel width")
-                print(f"  freq_high_mhz:      {archive_freqs[-1] + _bw/2:.6f}"
-                      f"   # last centre + half mean channel width")
-                print(f"  reference_freq_mhz: {REF_FREQ_MHZ:.11f}   # unchanged from this config")
-                print(f"  channel_freqs_mhz:")
-                for v in archive_freqs:
-                    print(f"    - {v:.9f}")
+        if args.emit_yaml:
+            if not _matched:
+                print("Nothing to emit — no config component could be paired with a fitted one.")
+                sys.exit(1)
+
+            shift = 0.0
+            if args.recentre_on:
+                # Use the SAME phase-matched pairing as the table above, not positional
+                # order: `components` is sorted by amplitude while the config is in
+                # declaration order, so indexing them together is wrong in general.
+                _hit = next(((cc, fc, off) for cc, fc, off in _matched
+                             if cc.name == args.recentre_on), None)
+                if _hit is None:
+                    _names   = [c.name for c in _cfg_comps]
+                    _matched_names = [cc.name for cc, _, _ in _matched]
+                    if args.recentre_on not in _names:
+                        print(f"ERROR: --recentre-on '{args.recentre_on}' is not a component "
+                              f"in {os.path.basename(cfg.path)}. Choose from: "
+                              f"{', '.join(_names)}")
+                    else:
+                        print(f"ERROR: config component '{args.recentre_on}' was not matched "
+                              f"to any fitted component. Matched: {', '.join(_matched_names)}")
+                    sys.exit(1)
+                shift = _hit[2]
+
+            print(f"{'═'*60}")
+            print(f"  components: BLOCK FOR {os.path.basename(cfg.path)}")
+            print(f"{'═'*60}")
+            print(f"# Fitted from: {os.path.basename(args.infile)}")
+            print(f"# amplitude_ref / concentration_ref below are defined AT "
+                  f"reference_freq_mhz = {REF_FREQ_MHZ:.11f}")
+            print(f"# (channel {ref_idx}). Do not paste these into a config with a different"
+                  f"\n# reference frequency without re-expressing them via the spectral indices.")
+            if args.recentre_on:
+                print(f"# Re-centred on '{args.recentre_on}': {shift:+.8f} phase subtracted from")
+                print(f"# every centre, so relative phases are preserved and toa stays near 0.")
+            print("components:")
+            for cc, fc, _off in _matched:
+                phase = (fc["mu"] / N_BINS - shift) % 1.0
+                # Keep the config's existing $refs for the free fields — the fit measures
+                # this epoch's realisation of them, not their priors.
+                print(f"  - name:                  {cc.name}")
+                print(f"    amplitude_ref:         {cc.amplitude_ref}"
+                      f"        # fitted this epoch: {fc['amp_rel']:.4f}")
+                print(f"    phase_center_ref:      {phase:.8f}")
+                print(f"    concentration_ref:     {cc.concentration_ref}"
+                      f"        # fitted this epoch: {fc['k']:.1f}")
+                print(f"    spectral_index_amp:    {cc.spectral_index_amp}")
+                print(f"    spectral_index_width:  {cc.spectral_index_width}")
+                print(f"    spectral_index_center: {cc.spectral_index_center}")
+                print(f"    sigma_broadening_bins: {cc.sigma_broadening_bins}")
                 print()
+            print("# NOTE: amplitude_ref / concentration_ref keep the config's existing")
+            print("#       literals and $refs. A single-epoch fit measures ONE realisation of")
+            print("#       parameters that are sampled over a prior, so it cannot set them —")
+            print("#       use the 'fitted this epoch' comments to sanity-check that the priors")
+            print("#       actually bracket the observed values.")
+            print()
+
+            if archive_freqs is not None:
+                _d = np.diff(archive_freqs)
+                if _d.size and _d.std() > 0.01 * _d.mean():
+                    _bw = _d.mean()
+                    print(f"{'═'*60}")
+                    print(f"  instrument: BLOCK — channels are unevenly spaced")
+                    print(f"{'═'*60}")
+                    print(f"  n_freq_channels:    {archive_freqs.size}")
+                    print(f"  n_phase_bins:       {N_BINS}")
+                    print(f"  freq_low_mhz:       {archive_freqs[0] - _bw/2:.6f}"
+                          f"   # first centre - half mean channel width")
+                    print(f"  freq_high_mhz:      {archive_freqs[-1] + _bw/2:.6f}"
+                          f"   # last centre + half mean channel width")
+                    print(f"  reference_freq_mhz: {REF_FREQ_MHZ:.11f}   # unchanged from this config")
+                    print(f"  channel_freqs_mhz:")
+                    for v in archive_freqs:
+                        print(f"    - {v:.9f}")
+                    print()
 
 
     # ─────────────────────────────────────────────────────────────────────────────
     # Weighted σ_toa from fit uncertainties (Fisher information)
     # ─────────────────────────────────────────────────────────────────────────────
 
-    PULSAR_PERIOD_S = cfg.period_s
+    PULSAR_PERIOD_S = cfg.period_s if cfg else SC["period_s"]
 
     fisher_sum = sum(c["amp_rel"]**2 * c["k"] / c["dmu"]**2
                      for c in components if c["dmu"] > 0)

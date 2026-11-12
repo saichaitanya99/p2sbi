@@ -1,5 +1,5 @@
 """P2SBI — Pulsar Profile SBI."""
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 import sys as _sys
 from . import pulsarDMvary as _pulsarDMvary

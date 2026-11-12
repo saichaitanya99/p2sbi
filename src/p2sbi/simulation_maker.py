@@ -53,16 +53,21 @@ def main(argv=None):
     _pre = argparse.ArgumentParser(add_help=False)
     _pre.add_argument("--config", type=str, default=None)
     _known, _ = _pre.parse_known_args(argv)
-    cfg = get_config(resolve_config_path(_known.config))
+    try:
+        cfg = get_config(resolve_config_path(_known.config))
+    except ValueError as e:
+        cfg, _no_cfg = None, str(e)     # still build the parser, so --help works
 
     parser = argparse.ArgumentParser(
-        description=f"Generate a single test simulation for {cfg.name} "
-                    f"@ {cfg.obs_name}. Parameter flags below are generated from "
-                    f"{os.path.basename(cfg.path)}.",
+        description=(f"Generate a single test simulation for {cfg.name} "
+                     f"@ {cfg.obs_name}. Parameter flags below are generated from "
+                     f"{os.path.basename(cfg.path)}.") if cfg else
+                    ("Generate a single test simulation. A config is required: pass "
+                     "--config to see the per-parameter flags it adds."),
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     parser.add_argument("--config", type=str, default=None,
-                        help="Path to the YAML config")
+                        help="Required (or set $SBI_PULSAR_CONFIG): path to the YAML config")
     parser.add_argument("--mjd", type=float, default=None,
                         help="MJD epoch. Default: the config's simulation.epoch_mjd")
     parser.add_argument("--seed", type=int, default=None,
@@ -83,12 +88,13 @@ def main(argv=None):
                              "Default: most recent sim*.pt in --outdir")
 
     # ── One flag per config parameter, inferred and nuisance alike ──────────────
-    _param_group = parser.add_argument_group(
-        "simulation parameters",
-        f"Generated from {os.path.basename(cfg.path)}. Unset parameters are drawn "
-        f"from their prior."
-    )
-    _all_params = list(cfg.inferred) + list(cfg.nuisance)
+    _all_params = list(cfg.inferred) + list(cfg.nuisance) if cfg else []
+    if cfg:
+        _param_group = parser.add_argument_group(
+            "simulation parameters",
+            f"Generated from {os.path.basename(cfg.path)}. Unset parameters are drawn "
+            f"from their prior."
+        )
     for _p in _all_params:
         _kind = "inferred" if _p in cfg.inferred else "nuisance"
         _param_group.add_argument(
@@ -98,6 +104,8 @@ def main(argv=None):
         )
 
     args = parser.parse_args(argv)
+    if cfg is None:
+        parser.error(_no_cfg)
 
     os.makedirs(args.outdir, exist_ok=True)
 
